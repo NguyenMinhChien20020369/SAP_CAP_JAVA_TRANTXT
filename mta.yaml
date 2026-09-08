@@ -1,0 +1,182 @@
+_schema-version: 3.3.0
+ID: jv-trantxt
+version: 1.0.0-SNAPSHOT
+description: "A simple CAP project."
+parameters:
+  enable-parallel-deployments: true
+  deploy_mode: html5-repo
+modules:
+  - name: jv-trantxt-srv
+    type: java
+    path: srv
+    parameters:
+      instances: 1
+      buildpack: sap_java_buildpack_jakarta
+    properties:
+      SPRING_PROFILES_ACTIVE: cloud,sandbox
+      JBP_CONFIG_COMPONENTS: "jres: ['com.sap.xs.java.buildpack.jre.SAPMachineJRE']"
+      JBP_CONFIG_SAP_MACHINE_JRE: '{ version: 21.+ }'
+    build-parameters:
+      builder: custom
+      commands:
+        - mvn clean package -DskipTests=true --batch-mode
+      build-result: target/*-exec.jar
+    provides:
+      - name: srv-api # required by consumers of CAP services (e.g. approuter)
+        properties:
+          srv-url: ${default-url}
+    requires:
+      - name: jv-trantxt-auth
+      - name: jv-trantxt-db
+      - name: jv-trantxt-destination
+
+  - name: jv-trantxt-db-deployer
+    type: hdb
+    path: db
+    parameters:
+      buildpack: nodejs_buildpack
+    build-parameters:
+      builder: custom
+      commands:
+        - npm run build
+    requires:
+      - name: jv-trantxt-db
+
+  - name: jv-trantxt
+    type: approuter.nodejs
+    path: app/router
+    parameters:
+      keep-existing-routes: true
+      disk-quota: 256M
+      memory: 256M
+    requires:
+      - name: srv-api
+        group: destinations
+        properties:
+          name: srv-api # must be used in xs-app.json as well
+          url: ~{srv-url}
+          forwardAuthToken: true
+      - name: jv-trantxt-auth
+      - name: jv-trantxt-html5-runtime
+      - name: jv-trantxt-destination
+    provides:
+      - name: app-api
+        properties:
+          app-protocol: ${protocol}
+          app-uri: ${default-uri}
+          url: ${default-url}
+
+  - name: jv-trantxt-app-deployer
+    type: com.sap.application.content
+    path: .
+    build-parameters:
+      build-result: resources
+      requires:
+        - name: jvtrantxtjvtrantxt
+          artifacts:
+            - jv-trantxt.zip
+          target-path: resources
+    requires:
+      - name: jv-trantxt-auth
+      - name: srv-api
+      - name: jv-trantxt-html5-repo-host
+        parameters:
+          content-target: true
+          config:
+            HTML5Runtime_enabled: true
+    parameters:
+      config:
+        destinations:
+          - Name: srv-api
+            URL: ~{srv-api/srv-url}
+            Authentication: NoAuthentication
+            Type: HTTP
+            ProxyType: Internet
+            ForwardAuthToken: true
+            DynamicDestination: true
+
+  - name: jvtrantxtjvtrantxt
+    type: html5
+    path: app/jv-trantxt
+    build-parameters:
+      build-result: dist
+      builder: custom
+      commands:
+        - npm ci
+        - npm run build
+      supported-platforms:
+        []
+
+  - name: jv-trantxt-destinations
+    type: com.sap.application.content
+    requires:
+      - name: jv-trantxt-auth
+        parameters:
+          service-key:
+            name: jv-trantxt-auth-key
+      - name: jv-trantxt-html5-repo-host
+        parameters:
+          service-key:
+            name: jv-trantxt-html5-repo-host-key
+      - name: srv-api
+      - name: jv-trantxt-destination
+        parameters:
+          content-target: true
+    build-parameters:
+      no-source: true
+    parameters:
+      content:
+        instance:
+          existing_destinations_policy: update
+          destinations:
+            - Name: jv-trantxt-html5-repository
+              ServiceInstanceName: jv-trantxt-html5-repo-host
+              ServiceKeyName: jv-trantxt-html5-repo-host-key
+              sap.cloud.service: jvtrantxt.service
+            - Name: jv-trantxt-auth
+              Authentication: OAuth2UserTokenExchange
+              ServiceInstanceName: jv-trantxt-auth
+              ServiceKeyName: jv-trantxt-auth-key
+              sap.cloud.service: jvtrantxt.service
+
+resources:
+  - name: jv-trantxt-auth
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: ./xs-security.json
+      config:
+        xsappname: jv-trantxt-${org}-${space}
+        tenant-mode: dedicated
+        oauth2-configuration:
+          credential-types:
+            - "binding-secret"
+            - "x509"
+          redirect-uris:
+            - https://*~{app-api/app-uri}/**
+    requires:
+      - name: app-api
+  - name: jv-trantxt-db
+    type: com.sap.xs.hdi-container
+    parameters:
+      service: hana
+      service-plan: hdi-shared
+
+  - name: jv-trantxt-html5-repo-host
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-host
+  - name: jv-trantxt-html5-runtime
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-runtime
+  - name: jv-trantxt-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
+    requires:
+      - name: srv-api

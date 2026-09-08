@@ -1,11 +1,9 @@
 {
   "name": "jv-trantxt-cds",
   "version": "1.0.0",
-  "devDependencies": {
-    "@sap/cds-dk": "^9.7.2"
-  },
   "dependencies": {
-    "@sap/cds": "^8.9.10"
+    "@sap/cds": "^9.9.3",
+    "@sap/cds-dk": "^9.9.5"
   },
   "sapux": [
     "app/jv-trantxt"
